@@ -4,6 +4,7 @@ BiasLens API v2.6.0 - main.py (Full Tier 1 Edition)
 Run: uvicorn main:app --reload --port 8000
 Docs: http://localhost:8000/docs
 """
+from typing import Any
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -306,13 +307,28 @@ async def analyze_heatmap(
 
 # == PDF Report ===============================================================
 @app.post("/api/audit/report", tags=["audit"])
-async def audit_pdf(data: AuditResponse, user: TokenData = Depends(get_current_user)): 
-    pdf = generate_pdf_report(data)
-    return StreamingResponse(
-        pdf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="biaslens_{data.audit_id}.pdf"'}
-    )
+async def audit_pdf(data: Dict[str, Any], user: Optional[TokenData] = Depends(get_current_user)): 
+    try:
+        print(f"[*] PDF Generation Started for: {data.get('filename', 'unknown')}")
+        from models.schemas import AuditResponse
+        # Use .parse_obj for more robust dict-to-model conversion
+        try:
+            audit_obj = AuditResponse.model_validate(data)
+        except Exception as ve:
+            print(f"[!] Validation Error: {ve}")
+            # Fallback to manual object construction or improved error
+            raise HTTPException(status_code=422, detail=f"Data validation failed: {str(ve)}")
+
+        pdf = generate_pdf_report(audit_obj)
+        print(f"[*] PDF Successfully Generated. Size: {pdf.getbuffer().nbytes} bytes")
+        return StreamingResponse(
+            pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="biaslens_{data.audit_id}.pdf"'}
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PDF Generation Error: {str(e)}")
 
 # == Column Detection =========================================================
 @app.post("/api/detect-columns", tags=["utilities"])
