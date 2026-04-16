@@ -20,12 +20,8 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 # Auth Imports
 import firebase_admin
-from firebase_admin import credentials, auth, firestore
+from firebase_admin import credentials, auth
 from services.auth import is_admin, Token, TokenData
-from database import (
-    get_db_connection, init_db, log_login_attempt,
-    check_account_locked, increment_failed_attempts, reset_failed_attempts
-)
 
 # Service & Utils Imports
 from config import settings
@@ -42,19 +38,13 @@ from services.explainer import get_ai_explanation
 from services.reporter import generate_pdf_report
 from services.analyzer import compute_correlation_heatmap
 
-# Initialize DB on start
-init_db()
-
 try:
     firebase_admin.get_app()
 except ValueError:
-    try:
-        cred = credentials.Certificate('firebase_admin.json')
-        firebase_admin.initialize_app(cred)
-    except FileNotFoundError:
-        firebase_admin.initialize_app()
-        
-db = firestore.client()
+    # Initialize without a file by explicitly passing your Project ID!
+    firebase_admin.initialize_app(options={
+        'projectId': 'biaslens-3c517'
+    })
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
 
@@ -250,15 +240,6 @@ async def audit_dataset(
                 background_ai_worker, 
                 result.audit_id, file.filename, result.summary, result.issues, result.metrics
             )
-            
-        # Sync to Firestore
-        if user and user.uid:
-            try:
-                doc_ref = db.collection("users").document(user.uid).collection("audits").document(result.audit_id)
-                doc_ref.set(result.dict())
-                print(f"Audit {result.audit_id} synced to Firestore for user {user.uid}")
-            except Exception as e:
-                print(f"Failed to sync to Firestore: {e}")
                 
         return result
     except HTTPException:
@@ -370,10 +351,12 @@ async def not_found(req, exc):
 
 if __name__ == "__main__":
     import uvicorn
+    import os
     print(f"""
 +------------------------------------------+
 |  BIASLENS API  v{settings.VERSION}               |
-|  Running: http://127.0.0.1:8000          |
+|  Running on Render / Local               |
 +------------------------------------------+
     """)
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
