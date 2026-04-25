@@ -1,7 +1,7 @@
 # <div align="center">⚖️ BIASLENS: THE COMPLETE BLUEPRINT</div>
 
 <div align="center">
-  <img src="https://img.shields.io/badge/AI_FAIRNESS_AUDITOR-v2.6.0-00f5ff?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/AI_FAIRNESS_AUDITOR-00f5ff?style=for-the-badge" />
   <img src="https://img.shields.io/badge/GOOGLE_PROMPT_WARS-2026-7000ff?style=for-the-badge" />
   <img src="https://img.shields.io/badge/POWERED_BY-NVIDIA_NIM-76B900?style=for-the-badge" />
 </div>
@@ -62,5 +62,5 @@ We integrated the **Llama-3.1-Nemotron-70B-Instruct** model via **NVIDIA NIM**. 
 
 <div align="center">
   <p><i>Built with ❤️ for the future of Ethical AI.</i></p>
-  <b>BIASLENS — DOCUMENTATION VERSION 2.6.0</b>
+  <b>BIASLENS </b>
 </div>
