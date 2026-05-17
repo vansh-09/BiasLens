@@ -6,6 +6,7 @@ Falls back to Google Gemini, then rule-based explanation.
 from typing import Optional, List
 from models.schemas import AuditSummary, BiasIssue, MetricResult
 from config import settings
+from fastapi import HTTPException
 import traceback
 
 
@@ -88,7 +89,7 @@ async def _nvidia_explanation(filename, summary, issues, metrics) -> Optional[st
         prompt = _build_prompt(filename, summary, issues, metrics)
 
         payload = {
-            "model": "nvidia/llama-3.1-nemotron-ultra-253b", # FIXED: Standardized model name
+            "model": "nvidia/llama-3.1-nemotron-ultra-253b",
             "messages": [
                 {"role": "system", "content": "You are an AI fairness expert. Be concise and direct."},
                 {"role": "user", "content": prompt}
@@ -98,7 +99,6 @@ async def _nvidia_explanation(filename, summary, issues, metrics) -> Optional[st
             "top_p": 0.9,
         }
 
-        # FIXED: Lowered timeout. If it takes >15s, it's better to switch to Gemini
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -113,6 +113,17 @@ async def _nvidia_explanation(filename, summary, issues, metrics) -> Optional[st
                 return data["choices"][0]["message"]["content"].strip()
             else:
                 print(f"NVIDIA API Error: {resp.status_code} - {resp.text}")
+
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=503,
+            detail="NVIDIA API timed out. Please try again later."
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not connect to NVIDIA API. Please check your network."
+        )
     except Exception as e:
         print(f"NVIDIA integration failed: {e}")
     return None
@@ -122,21 +133,40 @@ async def _gemini_explanation(filename, summary, issues, metrics) -> Optional[st
     """Call Google Gemini API asynchronously using run_in_executor."""
     try:
         import google.generativeai as genai
+        import google.api_core.exceptions as google_exceptions
         import asyncio
-        
+
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel("gemini-1.5-flash")
         prompt = _build_prompt(filename, summary, issues, metrics)
-        
-        # FIXED: The genai library is synchronous. Calling it directly in an async function 
-        # blocks the FastAPI event loop. We must wrap it in a thread.
+
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, model.generate_content, prompt)
-        
         return response.text.strip()
+
+    except google_exceptions.DeadlineExceeded:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini API timed out. Please try again later."
+        )
+    except google_exceptions.ResourceExhausted:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini API rate limit reached. Please try again later."
+        )
+    except google_exceptions.ServiceUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini API is currently unavailable."
+        )
+    except google_exceptions.InvalidArgument as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gemini API rejected the request: {str(e)}"
+        )
     except Exception as e:
         print(f"Gemini integration failed: {e}")
-    return None
+        return None
 
 
 def _fallback_explanation(filename, summary, issues) -> str:

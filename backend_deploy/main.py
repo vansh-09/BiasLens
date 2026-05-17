@@ -253,6 +253,8 @@ async def background_ai_worker(audit_id, filename, summary, issues, metrics):
     try:
         explanation = await get_ai_explanation(filename, summary, issues, metrics)
         ai_explanation_cache[audit_id] = explanation
+    except HTTPException as e:
+        ai_explanation_cache[audit_id] = f"AI service unavailable ({e.status_code}): {e.detail}"
     except Exception as e:
         ai_explanation_cache[audit_id] = f"Error generating AI summary: {str(e)}"
 
