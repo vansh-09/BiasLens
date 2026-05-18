@@ -99,7 +99,12 @@ def _is_categorical_usable(series: pd.Series) -> bool:
     if unique_count < 2:
         return False
 
-    if pd.api.types.is_categorical_dtype(series) or pd.api.types.is_bool_dtype(series) or pd.api.types.is_object_dtype(series):
+    if (
+        pd.api.types.is_categorical_dtype(series)
+        or pd.api.types.is_bool_dtype(series)
+        or pd.api.types.is_object_dtype(series)
+        or pd.api.types.is_string_dtype(series)
+    ):
         return True
 
     if pd.api.types.is_integer_dtype(series):
@@ -275,7 +280,7 @@ def validate_json_payload(data: Any) -> None:
                 "JSON file must contain an array of objects.",
                 status_code=422,
             )
-        for item in data[:20]:
+        for item in data:
             if not is_json_record_safe(item):
                 raise ValidationError(
                     "INVALID_JSON_STRUCTURE",
