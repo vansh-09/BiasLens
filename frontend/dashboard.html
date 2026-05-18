@@ -9,6 +9,61 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  /* ==========================================
+     FRONTEND OPTIMIZATION: DASHBOARD RESPONSIVENESS
+     ========================================== */
+  @media(max-width: 640px) {
+    .topbar {
+      padding: 12px 14px !important;
+      padding-top: calc(12px + var(--safe-top)) !important;
+      flex-direction: column !important;
+      align-items: flex-start !important;
+      gap: 12px !important;
+    }
+    .tb-right {
+      width: 100% !important;
+      justify-content: flex-start !important;
+      gap: 6px !important;
+    }
+    .btn-exp, .btn-new, .btn-o {
+      padding: 6px 10px !important;
+      font-size: 9px !important;
+      flex: 1 !important;
+      text-align: center !important;
+    }
+    .score-banner {
+      flex-direction: column !important;
+      align-items: flex-start !important;
+      padding: 16px !important;
+      gap: 20px !important;
+    }
+    .sb-scores {
+      width: 100% !important;
+      justify-content: space-between !important;
+      display: grid !important;
+      grid-template-columns: repeat(2, 1fr) !important;
+      gap: 16px !important;
+    }
+    .sb-div {
+      display: none !important;
+    }
+    .ss {
+      text-align: left !important;
+      background: rgba(255, 255, 255, 0.02) !important;
+      padding: 8px !important;
+      border-radius: 8px !important;
+      border: 1px solid var(--border) !important;
+    }
+    .cg {
+      grid-template-columns: 1fr !important;
+    }
+    .kpi-row {
+      grid-template-columns: 1fr !important;
+    }
+    .comp-grid {
+      grid-template-columns: 1fr !important;
+    }
+  }
 :root{--bg:#020208;--c1:#00f5ff;--c2:#7000ff;--c3:#ff0080;--c4:#00ff88;--text:#f0f4ff;--muted:rgba(240,244,255,0.62);--dim:rgba(240,244,255,0.35);--border:rgba(0,245,255,0.13);--border2:rgba(0,245,255,0.27);--card:rgba(8,8,24,0.52);--side:220px;--safe-top:env(safe-area-inset-top,0px);--safe-bot:env(safe-area-inset-bottom,0px);}
 html,body{height:100%;}
 body{font-family:'Space Grotesk',sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden;display:flex;}
