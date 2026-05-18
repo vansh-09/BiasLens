@@ -32,6 +32,14 @@ from utils.file_parser import (
     auto_detect_sensitive_attributes, preprocess_dataframe, encode_dataframe
 )
 from utils.helpers import generate_audit_id, get_timestamp, Timer
+from utils.validation import (
+    ValidationError,
+    validate_dataset_structure,
+    validate_sensitive_attributes,
+    validate_target_column,
+    validate_binary_labels,
+    validate_positive_label,
+)
 from services.metrics import run_all_metrics, detect_proxy_variables, compute_group_outcomes
 from services.detector import build_dataset_info, build_issues_from_metrics, build_audit_summary
 from services.mitigator import get_relevant_strategies, apply_mitigation
@@ -94,6 +102,25 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+@app.exception_handler(ValidationError)
+async def validation_exception_handler(request: Request, exc: ValidationError):
+    return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict) and exc.detail.get("error"):
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error": {
+                "code": "HTTP_ERROR",
+                "message": str(exc.detail),
+            },
+        },
+    )
+
 # == RATE LIMITING ============================================================
 _rate_limits: Dict[str, list] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60   # seconds
@@ -137,55 +164,52 @@ async def _run_audit_pipeline(
     timer = Timer()
     df_raw = df.copy()
 
+    validate_dataset_structure(df)
+
     # Tier 1 Optimization: Guard against massive datasets crashing the demo
     if len(df) > 50000:
         df = df.head(50000)
 
     # 1. Resolve label column
-    label_col = label_column or auto_detect_label_column(df)
-    if not label_col or label_col not in df.columns:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Cannot find label column. Available columns: {df.columns.tolist()}."
-        )
+    if label_column:
+        label_col = validate_target_column(df, label_column.strip())
+    else:
+        label_col = auto_detect_label_column(df)
+        if not label_col:
+            raise ValidationError(
+                "MISSING_TARGET_COLUMN",
+                f"Cannot detect target label column. Available columns: {df.columns.tolist()}.",
+                {"available_columns": df.columns.tolist()},
+            )
+        validate_target_column(df, label_col)
 
     # 2. Resolve sensitive attributes
-    s_attrs = None
     if sensitive_attributes:
-        s_attrs = [a.strip() for a in sensitive_attributes.split(",")
-                   if a.strip() in df.columns]
-
-    if not s_attrs:
+        requested = [a.strip() for a in sensitive_attributes.split(",") if a.strip()]
+        s_attrs = validate_sensitive_attributes(df, requested)
+    else:
         s_attrs = auto_detect_sensitive_attributes(df, label_col)
+        if not s_attrs:
+            raise ValidationError(
+                "MISSING_SENSITIVE_ATTRIBUTES",
+                "No sensitive attributes detected. Please specify manually.",
+                {"available_columns": [c for c in df.columns if c != label_col]},
+            )
+        s_attrs = validate_sensitive_attributes(df, s_attrs, allow_autodetect=True)
 
-    if not s_attrs:
-        raise HTTPException(
-            status_code=422,
-            detail="No sensitive attributes detected. Please specify manually."
-        )
+    validate_binary_labels(df, label_col)
+    pos_label = validate_positive_label(df, label_col, positive_label)
 
-    # 3. SAFETY FIX: Smart type matching for labels
-    pos_label = positive_label
-    if label_col in df.columns:
-        actual_type = df[label_col].dtype
-        try:
-            if np.issubdtype(actual_type, np.integer):
-                pos_label = int(float(positive_label))
-            elif np.issubdtype(actual_type, np.floating):
-                pos_label = float(positive_label)
-        except Exception:
-            pos_label = str(positive_label)
-
-    # 4. Preprocess & Encode
+    # 3. Preprocess & Encode
     df_clean = preprocess_dataframe(df, label_col)
     df_encoded, _ = encode_dataframe(df_clean, label_col, s_attrs)
 
-    # 5. Run Metrics asynchronously to preserve main thread 
+    # 4. Run Metrics asynchronously to preserve main thread
     metrics = await asyncio.to_thread(run_all_metrics, df_encoded, s_attrs, label_col, pos_label)
     if not metrics:
         raise HTTPException(status_code=500, detail="Metric computation failed.")
 
-    # 6. Proxies, Outcomes, Issues, Strategies 
+    # 5. Proxies, Outcomes, Issues, Strategies
     proxy_vars = await asyncio.to_thread(detect_proxy_variables, df_encoded, s_attrs, label_col)
     group_outcomes = await asyncio.to_thread(compute_group_outcomes, df_encoded, s_attrs, label_col, pos_label)
     issues = await asyncio.to_thread(build_issues_from_metrics, metrics, proxy_vars)
@@ -193,7 +217,7 @@ async def _run_audit_pipeline(
     dataset_info = await asyncio.to_thread(build_dataset_info, df_clean, s_attrs, label_col, df_raw)
     summary = await asyncio.to_thread(build_audit_summary, metrics, issues, timer)
 
-    # 7. AI Explanation
+    # 6. AI Explanation
     ai_explanation = None
     if use_ai_explanation:
         ai_explanation = await get_ai_explanation(filename, summary, issues, metrics)
@@ -212,8 +236,15 @@ async def _run_audit_pipeline(
         created_at=get_timestamp()
     )
 
+
+def build_success_response(payload: dict, validation: Optional[dict] = None) -> dict:
+    response = {"success": True, "data": payload, **payload}
+    if validation is not None:
+        response["validation"] = validation
+    return response
+
 # == Main Audit Endpoint =======================================================
-@app.post("/api/audit", response_model=AuditResponse, tags=["audit"])
+@app.post("/api/audit", tags=["audit"])
 async def audit_dataset(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Dataset file (CSV, JSON, XLSX, Parquet)"),
@@ -226,7 +257,6 @@ async def audit_dataset(
     try:
         df = await parse_uploaded_file(file)
         
-        # Run math engine immediately
         result = await _run_audit_pipeline(
             df=df,
             filename=file.filename,
@@ -241,8 +271,14 @@ async def audit_dataset(
                 background_ai_worker, 
                 result.audit_id, file.filename, result.summary, result.issues, result.metrics
             )
-                
-        return result
+
+        return build_success_response(result.model_dump(), validation={
+            "label_column": result.dataset_info.label_column,
+            "sensitive_attributes": result.dataset_info.sensitive_attributes,
+            "positive_label": positive_label,
+        })
+    except ValidationError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -266,7 +302,7 @@ async def get_ai_status(audit_id: str):
 
 
 # == Mitigation Endpoint ======================================================
-@app.post("/api/mitigate", response_model=MitigationAuditResponse, tags=["audit"])
+@app.post("/api/mitigate", tags=["audit"])
 async def mitigate_bias(
     file: UploadFile = File(...),
     strategy_id: str = Form(...),
@@ -276,18 +312,30 @@ async def mitigate_bias(
 ):
     try:
         df_orig = await parse_uploaded_file(file)
+        s_attrs = [a.strip() for a in sensitive_attributes.split(",") if a.strip()]
+        validate_sensitive_attributes(df_orig, s_attrs)
         orig_audit = await _run_audit_pipeline(df_orig.copy(), file.filename, label_column, sensitive_attributes, positive_label)
-        s_attrs = [a.strip() for a in sensitive_attributes.split(",")]
+
         df_mitigated, desc = apply_mitigation(df_orig, strategy_id, label_column, s_attrs, positive_label)
         mitigated_audit = await _run_audit_pipeline(df_mitigated, f"mitigated_{file.filename}", label_column, sensitive_attributes, positive_label)
 
-        return MitigationAuditResponse(
-            original_audit=orig_audit,
-            mitigated_audit=mitigated_audit,
-            mitigation_applied=desc,
-            improvement_score=mitigated_audit.summary.overall_score - orig_audit.summary.overall_score,
-            mitigated_filename=f"mitigated_{file.filename}"
-        )
+        payload = {
+            "original_audit": orig_audit.model_dump(),
+            "mitigated_audit": mitigated_audit.model_dump(),
+            "mitigation_applied": desc,
+            "improvement_score": mitigated_audit.summary.overall_score - orig_audit.summary.overall_score,
+            "mitigated_filename": f"mitigated_{file.filename}",
+        }
+        return build_success_response(payload, validation={
+            "strategy_id": strategy_id,
+            "label_column": label_column,
+            "sensitive_attributes": s_attrs,
+            "positive_label": positive_label,
+        })
+    except ValidationError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Mitigation failed: {str(e)}")
@@ -301,9 +349,14 @@ async def analyze_heatmap(
 ):
     try:
         df = await parse_uploaded_file(file)
-        s_attrs = [a.strip() for a in sensitive_attributes.split(",") if a.strip() in df.columns]
-        data = compute_correlation_heatmap(df, s_attrs, label_column)
+        label_col = validate_target_column(df, label_column.strip())
+        s_attrs = validate_sensitive_attributes(df, [a.strip() for a in sensitive_attributes.split(",") if a.strip()])
+        data = compute_correlation_heatmap(df, s_attrs, label_col)
         return HeatmapData(**data)
+    except ValidationError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
