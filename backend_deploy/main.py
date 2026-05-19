@@ -4,6 +4,7 @@ BiasLens API v2.6.0 - main.py (Full Tier 1 Edition)
 Run: uvicorn main:app --reload --port 8000
 Docs: http://localhost:8000/docs
 """
+import io
 from typing import Any
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,10 @@ from services.detector import build_dataset_info, build_issues_from_metrics, bui
 from services.mitigator import get_relevant_strategies, apply_mitigation
 from services.explainer import get_ai_explanation
 from services.reporter import generate_pdf_report
+from services.export_service import (
+    generate_json_export,
+    generate_csv_export
+)
 from services.analyzer import compute_correlation_heatmap
 
 try:
@@ -384,6 +389,53 @@ async def audit_pdf(data: Dict[str, Any], user: Optional[TokenData] = Depends(ge
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF Generation Error: {str(e)}")
+
+
+
+    # == JSON Export =============================================================
+@app.post("/api/audit/export/json", tags=["audit"])
+async def export_json(
+    data: Dict[str, Any],
+    user: Optional[TokenData] = Depends(get_current_user)
+):
+
+    try:
+        json_data = generate_json_export(data)
+
+        return StreamingResponse(
+            io.BytesIO(json_data.encode("utf-8")),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": "attachment; filename=biaslens_report.json"
+            }
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"JSON export failed: {str(e)}")
+
+
+# == CSV Export ==============================================================
+@app.post("/api/audit/export/csv", tags=["audit"])
+async def export_csv(
+    data: Dict[str, Any],
+    user: Optional[TokenData] = Depends(get_current_user)
+):
+
+    try:
+        csv_file = generate_csv_export(data)
+
+        return StreamingResponse(
+            iter([csv_file.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=biaslens_report.csv"
+            }
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"CSV export failed: {str(e)}")    
 
 # == Column Detection =========================================================
 @app.post("/api/detect-columns", tags=["utilities"])
